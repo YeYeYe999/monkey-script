@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ElementGetter
-// @author       cxxjackie
-// @version      2.0.0
+// @author       cxxjackie,gpt
+// @version      2.1.0
 // @supportURL   https://bbs.tampermonkey.net.cn/thread-2726-1-1.html
 // ==/UserScript==
 var elmGetter = (function () {
