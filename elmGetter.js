@@ -1,13 +1,12 @@
 // ==UserScript==
 // @name         ElementGetter
 // @author       cxxjackie, chatGPT
-// @version      2.2.0
-// @supportURL   https://bbs.tampermonkey.net.cn/thread-2726-1-1.html
+// @version      2.2.2
 // ==/UserScript==
 
 const elmGetter = (() => {
-  const win = window.unsafeWindow || document.defaultView || window;
-  const doc = win.document;
+  const windowObject = window.unsafeWindow || document.defaultView || window;
+  const documentObject = windowObject.document;
   let mode = "css";
   let $;
 
@@ -18,15 +17,15 @@ const elmGetter = (() => {
     Element.prototype.mozMatchesSelector ||
     Element.prototype.oMatchesSelector;
 
-  const MutationObs =
-    win.MutationObserver ||
-    win.WebkitMutationObserver ||
-    win.MozMutationObserver;
+  const MutationObserver =
+    windowObject.MutationObserver ||
+    windowObject.WebkitMutationObserver ||
+    windowObject.MozMutationObserver;
 
   const listeners = new WeakMap();
 
   function addObserver(target, callback) {
-    const observer = new MutationObs(mutations => {
+    const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         if (mutation.type === "attributes" || mutation.addedNodes.length) {
           callback(mutation.target);
@@ -37,7 +36,7 @@ const elmGetter = (() => {
     observer.observe(target, {
       childList: true,
       subtree: true,
-      attributes: true
+      attributes: true,
     });
 
     return () => observer.disconnect();
@@ -49,9 +48,9 @@ const elmGetter = (() => {
     if (!listener) {
       listener = {
         filters: new Set(),
-        remove: addObserver(target, el =>
-          listener.filters.forEach(f => f(el))
-        )
+        remove: addObserver(target, (el) =>
+          listener.filters.forEach((f) => f(el))
+        ),
       };
 
       listeners.set(target, listener);
@@ -73,54 +72,21 @@ const elmGetter = (() => {
     }
   }
 
-  function query(all, selector, parent, includeParent, curMode) {
-    switch (curMode) {
-      case "css":
-        const checkParent = includeParent && matches.call(parent, selector);
-        return all
-          ? Array.from(parent.querySelectorAll(selector), el =>
-              checkParent ? [parent].concat(el) : el
-            )
-          : checkParent
-          ? parent
-          : parent.querySelector(selector);
-
-      case "jquery":
-        let jNodes = $(includeParent ? parent : []);
-        jNodes = jNodes.add([...parent.querySelectorAll("*")]).filter(selector);
-
-        return all
-          ? $.map(jNodes, el => $(el))
-          : jNodes.length
-          ? $(jNodes[0])
-          : null;
-
-      case "xpath":
-        const ownerDoc = parent.ownerDocument || parent;
-        const xPathResult = ownerDoc.evaluate(
-          selector + "/self::*",
-          parent,
-          null,
-          all ? 7 : 9,
-          null
-        );
-
-        return all
-          ? Array.from({ length: xPathResult.snapshotLength }, (_, i) =>
-              xPathResult.snapshotItem(i)
-            )
-          : xPathResult.singleNodeValue;
-    }
+  function queryAll(selector, parent, includeParent) {
+    const checkParent = includeParent && matches.call(parent, selector);
+    return Array.from(parent.querySelectorAll(selector), (el) =>
+      checkParent ? [parent].concat(el) : el
+    );
   }
 
-  function getOne(selector, parent, timeout) {
-    return new Promise(resolve => {
-      const node = query(false, selector, parent, false, mode);
+  function queryOne(selector, parent, timeout) {
+    return new Promise((resolve) => {
+      const node = query(selector, parent);
 
       if (node) return resolve(node);
 
-      const filter = el => {
-        const found = query(false, selector, el, true, mode);
+      const filter = (el) => {
+        const found = query(selector, el);
 
         if (found) {
           removeFilter(parent, filter);
@@ -139,32 +105,56 @@ const elmGetter = (() => {
     });
   }
 
+  function query(selector, parent) {
+    switch (mode) {
+      case "css":
+        return parent.querySelector(selector);
+
+      case "jquery":
+        let jNodes = $(parent);
+        jNodes = jNodes.add([...parent.querySelectorAll("*")]);
+
+        return jNodes.filter(selector).first();
+
+      case "xpath":
+        const ownerDoc = parent.ownerDocument || parent;
+        const xPathResult = ownerDoc.evaluate(
+          selector + "/self::*",
+          parent,
+          null,
+          XPathResult.FIRST_ORDERED_NODE_TYPE,
+          null
+        );
+
+        return xPathResult.singleNodeValue;
+
+      default:
+        return null;
+    }
+  }
+
   return {
     get currentSelector() {
       return mode;
     },
 
-    get(selector, ...args) {
-      let parent = (typeof args[0] !== "number" && args.shift()) || doc;
-      const timeout = args[0] || 0;
-
+    get(selector, parent = documentObject, timeout = 0) {
       if (Array.isArray(selector)) {
-        return Promise.all(selector.map(s => getOne(s, parent, timeout)));
+        return Promise.all(selector.map((s) => queryOne(s, parent, timeout)));
       }
 
-      return getOne(selector, parent, timeout);
+      return queryOne(selector, parent, timeout);
     },
 
-    each(selector, ...args) {
-      let parent = (typeof args[0] !== "function" && args.shift()) || doc;
-      const callback = args[0];
+    each(selector, parent = documentObject, callback) {
+      const nodes = queryAll(selector, parent, false);
 
-      for (const node of query(true, selector, parent, false, mode)) {
+      for (const node of nodes) {
         if (callback(node) === false) break;
       }
 
-      const filter = el => {
-        for (const node of query(true, selector, el, true, mode)) {
+      const filter = (el) => {
+        for (const node of queryAll(selector, el, true)) {
           if (callback(node, true) === false) {
             return removeFilter(parent, filter);
           }
@@ -172,6 +162,38 @@ const elmGetter = (() => {
       };
 
       addFilter(parent, filter);
+    },
+
+    eachAsync(selector, parent = documentObject, callback) {
+      return new Promise((resolve, reject) => {
+        const nodes = queryAll(selector, parent, false);
+        const promises = [];
+
+        for (const node of nodes) {
+          const result = callback(node);
+          if (result instanceof Promise) {
+            promises.push(result);
+          }
+        }
+
+        const filter = (el) => {
+          for (const node of queryAll(selector, el, true)) {
+            const result = callback(node, true);
+            if (result instanceof Promise) {
+              promises.push(result);
+            }
+          }
+        };
+
+        addFilter(parent, filter);
+
+        Promise.all(promises)
+          .then(() => {
+            removeFilter(parent, filter);
+            resolve();
+          })
+          .catch(reject);
+      });
     },
 
     selector(desc) {
@@ -184,7 +206,12 @@ const elmGetter = (() => {
           return (mode = "css");
 
         case desc.toLowerCase() === "jquery":
-          for (const jq of [window.jQuery, window.$, win.jQuery, win.$]) {
+          for (const jq of [
+            window.jQuery,
+            window.$,
+            windowObject.jQuery,
+            windowObject.$,
+          ]) {
             if (isJquery(jq)) {
               $ = jq;
               break;
@@ -199,6 +226,6 @@ const elmGetter = (() => {
         default:
           return (mode = "css");
       }
-    }
+    },
   };
 })();
