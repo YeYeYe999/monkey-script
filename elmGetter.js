@@ -1,50 +1,54 @@
 // ==UserScript==
 // @name         ElementGetter
-// @author       cxxjackie, chatGPT
+// @author       cxxjackie, chatgpt, Copilot
 // @version      2.2.2
+// @supportURL   https://bbs.tampermonkey.net.cn/thread-2726-1-1.html
 // ==/UserScript==
 
-const elmGetter = (() => {
-  const windowObject = window.unsafeWindow || document.defaultView || window;
-  const documentObject = windowObject.document;
-  let mode = "css";
-  let $;
-
-  const matches =
-    Element.prototype.matches ||
-    Element.prototype.matchesSelector ||
-    Element.prototype.webkitMatchesSelector ||
-    Element.prototype.mozMatchesSelector ||
-    Element.prototype.oMatchesSelector;
-
-  const MutationObserver =
-    windowObject.MutationObserver ||
-    windowObject.WebkitMutationObserver ||
-    windowObject.MozMutationObserver;
-
+var elmGetter = (function () {
+  const win = window.unsafeWindow || document.defaultView || window;
+  const doc = win.document;
   const listeners = new WeakMap();
+  let mode = "css";
+  const elProto = win.Element.prototype;
+  const matches =
+    elProto.matches ||
+    elProto.matchesSelector ||
+    elProto.webkitMatchesSelector ||
+    elProto.mozMatchesSelector ||
+    elProto.oMatchesSelector;
+  const MutationObs =
+    win.MutationObserver ||
+    win.WebkitMutationObserver ||
+    win.MozMutationObserver;
 
   function addObserver(target, callback) {
-    const observer = new MutationObserver((mutations) => {
+    const observer = new MutationObs((mutations) => {
       for (const mutation of mutations) {
-        if (mutation.type === "attributes" || mutation.addedNodes.length) {
+        if (mutation.type === "attributes") {
           callback(mutation.target);
+          if (observer.canceled) return;
+        }
+        for (const node of mutation.addedNodes) {
+          if (node instanceof Element) callback(node);
+          if (observer.canceled) return;
         }
       }
     });
-
+    observer.canceled = false;
     observer.observe(target, {
       childList: true,
       subtree: true,
       attributes: true,
     });
-
-    return () => observer.disconnect();
+    return () => {
+      observer.canceled = true;
+      observer.disconnect();
+    };
   }
 
   function addFilter(target, filter) {
     let listener = listeners.get(target);
-
     if (!listener) {
       listener = {
         filters: new Set(),
@@ -52,52 +56,46 @@ const elmGetter = (() => {
           listener.filters.forEach((f) => f(el))
         ),
       };
-
       listeners.set(target, listener);
     }
-
     listener.filters.add(filter);
   }
 
   function removeFilter(target, filter) {
     const listener = listeners.get(target);
-
-    if (listener) {
-      listener.filters.delete(filter);
-
-      if (!listener.filters.size) {
-        listener.remove();
-        listeners.delete(target);
-      }
+    if (!listener) return;
+    listener.filters.delete(filter);
+    if (!listener.filters.size) {
+      listener.remove();
+      listeners.delete(target);
     }
   }
 
-  function queryAll(selector, parent, includeParent) {
+  function query(all, selector, parent, includeParent) {
     const checkParent = includeParent && matches.call(parent, selector);
-    return Array.from(parent.querySelectorAll(selector), (el) =>
-      checkParent ? [parent].concat(el) : el
-    );
+    if (all) {
+      const queryAll = parent.querySelectorAll(selector);
+      return checkParent ? [parent, ...queryAll] : [...queryAll];
+    }
+    return checkParent ? parent : parent.querySelector(selector);
   }
 
-  function queryOne(selector, parent, timeout) {
+  function getOne(selector, parent, timeout) {
     return new Promise((resolve) => {
-      const node = query(selector, parent);
-
+      const node = query(false, selector, parent, false);
       if (node) return resolve(node);
-
+      let timer;
       const filter = (el) => {
-        const found = query(selector, el);
-
-        if (found) {
+        const node = query(false, selector, el, true);
+        if (node) {
           removeFilter(parent, filter);
-          resolve(found);
+          timer && clearTimeout(timer);
+          resolve(node);
         }
       };
-
       addFilter(parent, filter);
-
       if (timeout > 0) {
-        const timer = setTimeout(() => {
+        timer = setTimeout(() => {
           removeFilter(parent, filter);
           resolve(null);
         }, timeout);
@@ -105,127 +103,63 @@ const elmGetter = (() => {
     });
   }
 
-  function query(selector, parent) {
-    switch (mode) {
-      case "css":
-        return parent.querySelector(selector);
-
-      case "jquery":
-        let jNodes = $(parent);
-        jNodes = jNodes.add([...parent.querySelectorAll("*")]);
-
-        return jNodes.filter(selector).first();
-
-      case "xpath":
-        const ownerDoc = parent.ownerDocument || parent;
-        const xPathResult = ownerDoc.evaluate(
-          selector + "/self::*",
-          parent,
-          null,
-          XPathResult.FIRST_ORDERED_NODE_TYPE,
-          null
-        );
-
-        return xPathResult.singleNodeValue;
-
-      default:
-        return null;
-    }
-  }
-
   return {
     get currentSelector() {
       return mode;
     },
-
-    get(selector, parent = documentObject, timeout = 0) {
+    get(selector, ...args) {
+      let parent = (typeof args[0] !== "number" && args.shift()) || doc;
+      const timeout = args[0] || 0;
       if (Array.isArray(selector)) {
-        return Promise.all(selector.map((s) => queryOne(s, parent, timeout)));
+        return Promise.all(selector.map((s) => getOne(s, parent, timeout)));
       }
-
-      return queryOne(selector, parent, timeout);
+      return getOne(selector, parent, timeout);
     },
-
-    each(selector, parent = documentObject, callback) {
-      const nodes = queryAll(selector, parent, false);
-
-      for (const node of nodes) {
-        if (callback(node) === false) break;
+    each(selector, ...args) {
+      let parent = (typeof args[0] !== "function" && args.shift()) || doc;
+      const callback = args[0];
+      const refs = new WeakSet();
+      for (const node of query(true, selector, parent, false)) {
+        refs.add(node);
+        if (callback(node, false) === false) return;
       }
-
       const filter = (el) => {
-        for (const node of queryAll(selector, el, true)) {
+        for (const node of query(true, selector, el, true)) {
+          if (refs.has(node)) break;
+          refs.add(node);
           if (callback(node, true) === false) {
             return removeFilter(parent, filter);
           }
         }
       };
-
       addFilter(parent, filter);
     },
 
-    eachAsync(selector, parent = documentObject, callback) {
-      return new Promise((resolve, reject) => {
-        const nodes = queryAll(selector, parent, false);
-        const promises = [];
-
-        for (const node of nodes) {
-          const result = callback(node);
-          if (result instanceof Promise) {
-            promises.push(result);
-          }
+    eachAsync(selector, ...args) {
+      return new Promise(async (resolve, reject) => {
+        let parent = (typeof args[0] !== "function" && args.shift()) || doc;
+        const callback = args[0];
+        const refs = new WeakSet();
+        for (const node of query(true, selector, parent, false)) {
+          refs.add(node);
+          if ((await callback(node, false)) === false)
+            return reject(new Error("callback returned false"));
+          // resolve();
         }
-
         const filter = (el) => {
-          for (const node of queryAll(selector, el, true)) {
-            const result = callback(node, true);
-            if (result instanceof Promise) {
-              promises.push(result);
+          for (const node of query(true, selector, el, true)) {
+            if (refs.has(node)) break;
+            refs.add(node);
+            if (callback(node, true) === false) {
+              return removeFilter(parent, filter);
             }
+            // resolve();
           }
+          return resolve();
         };
-
         addFilter(parent, filter);
-
-        Promise.all(promises)
-          .then(() => {
-            removeFilter(parent, filter);
-            resolve();
-          })
-          .catch(reject);
+        // resolve();
       });
-    },
-
-    selector(desc) {
-      switch (true) {
-        case isJquery(desc):
-          $ = desc;
-          return (mode = "jquery");
-
-        case !desc || typeof desc.toLowerCase !== "function":
-          return (mode = "css");
-
-        case desc.toLowerCase() === "jquery":
-          for (const jq of [
-            window.jQuery,
-            window.$,
-            windowObject.jQuery,
-            windowObject.$,
-          ]) {
-            if (isJquery(jq)) {
-              $ = jq;
-              break;
-            }
-          }
-
-          return (mode = $ ? "jquery" : "css");
-
-        case desc.toLowerCase() === "xpath":
-          return (mode = "xpath");
-
-        default:
-          return (mode = "css");
-      }
     },
   };
 })();
