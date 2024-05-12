@@ -144,7 +144,6 @@ var elmGetter = (function () {
           refs.add(node);
           if ((await callback(node, false)) === false)
             return reject(new Error("callback returned false"));
-          // resolve();
         }
         const filter = (el) => {
           for (const node of query(true, selector, el, true)) {
@@ -153,12 +152,10 @@ var elmGetter = (function () {
             if (callback(node, true) === false) {
               return removeFilter(parent, filter);
             }
-            // resolve();
+            resolve();
           }
-          return resolve();
         };
         addFilter(parent, filter);
-        // resolve();
       });
     },
   };
