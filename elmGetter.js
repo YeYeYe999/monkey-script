@@ -135,28 +135,32 @@ var elmGetter = (function () {
       addFilter(parent, filter);
     },
 
-    eachAsync(selector, ...args) {
-      return new Promise(async (resolve, reject) => {
-        let parent = (typeof args[0] !== "function" && args.shift()) || doc;
-        const callback = args[0];
-        const refs = new WeakSet();
-        for (const node of query(true, selector, parent, false)) {
-          refs.add(node);
-          if ((await callback(node, false)) === false)
-            return reject(new Error("callback returned false"));
-        }
-        const filter = (el) => {
-          for (const node of query(true, selector, el, true)) {
-            if (refs.has(node)) break;
+      eachAsync(selector, ...args) {
+        return new Promise(async (resolve, reject) => {
+          let parent = (typeof args[0] !== "function" && args.shift()) || doc;
+          const callback = args[0];
+          const refs = new WeakSet();
+          for (const node of query(true, selector, parent, false)) {
             refs.add(node);
-            if (callback(node, true) === false) {
-              return removeFilter(parent, filter);
-            }
-            resolve();
+            if ((await callback(node, false)) === false) return reject();
           }
-        };
-        addFilter(parent, filter);
-      });
-    },
+
+          const filter = (el) => {
+            for (const node of query(true, selector, el, true)) {
+              if (refs.has(node)) break;
+              refs.add(node);
+              if (callback(node, true) === false) {
+                removeFilter(parent, filter);
+                reject();
+                return;
+              }
+              resolve();
+            }
+            // resolve(); // 在filter函数中的操作完成后调用resolve
+          };
+          addFilter(parent, filter);
+
+        });
+      },
   };
 })();
