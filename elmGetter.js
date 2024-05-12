@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ElementGetter
 // @author       cxxjackie, chatgpt, Copilot
-// @version      2.2.2
+// @version      2.2.3
 // @supportURL   https://bbs.tampermonkey.net.cn/thread-2726-1-1.html
 // ==/UserScript==
 
