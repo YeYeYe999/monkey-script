@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Element Getter Lite
+// @name         ElementGetterLite
 // @namespace    https://bbs.tampermonkey.net.cn/
 // @version      1.0.0
 // @description  简洁优雅的元素获取工具，支持等待元素出现
